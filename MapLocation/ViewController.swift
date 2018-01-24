@@ -35,16 +35,15 @@ class ViewController: UIViewController {
             if #available(iOS 11.0, *) {
                 mapView.register(MKPinAnnotationView.self, forAnnotationViewWithReuseIdentifier: annotationId)
             } else {
-                
+                /// 其它版本的系统需要自行实现
             }
         }
     }
     
-    @IBOutlet weak var tableView: UITableView! {
-        didSet {
-//            tableView.tableHeaderView = mapView
-        }
-    }
+    @IBOutlet weak var tableHeadView: UIView!
+    
+    @IBOutlet weak var tableView: UITableView!
+    
     
     // 管理者
     fileprivate var locationManager = CLLocationManager()
@@ -59,16 +58,27 @@ class ViewController: UIViewController {
         super.viewDidLoad()
         userLocationInit()
     }
+    
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        view.endEditing(true)
+    }
 }
 
 
-// MARK: - 地图控件操作
+// MARK: - 处理逻辑
 extension ViewController {
-    func mapViewUpdate() {
-        
+    
+    /// 用户当前位置的初始化，其实可要可不要，因为 MapView 自带有
+    func userLocationInit() {
+        locationManager.delegate = self
+        if CLLocationManager.locationServicesEnabled() {
+            locationManager.requestWhenInUseAuthorization()
+        } else {
+            print("Location Not In Use")
+        }
     }
     
-    // 结构化地址信息
+    /// 结构化地址信息
     func locationText(mark: CLPlacemark) -> String {
         var locationText = ""
         
@@ -90,19 +100,9 @@ extension ViewController {
         
         return locationText
     }
-}
-
-// MARK: - 搜索方法的逻辑
-extension ViewController {
-    func userLocationInit() {
-        locationManager.delegate = self
-        if CLLocationManager.locationServicesEnabled() {
-            locationManager.requestWhenInUseAuthorization()
-        } else {
-            print("Location Not In Use")
-        }
-    }
     
+    /// 通过关键词进行地理位置信息搜索
+    /// 1. 如果当前进行其它城市的检索需要输入完整的信息，默认填充当前用户所在的城市位置
     func locationSearch(text: String) {
         
         // 如果当前检索的内容没有xx市，则添加当前用户市所在信息
@@ -125,14 +125,32 @@ extension ViewController {
         }
     }
     
+    /// 通过地理编码进行反编译识别
+    func locationReverseSearch(location: CLLocation) {
+        CLGeocoder().reverseGeocodeLocation(location, completionHandler: { (placeMarks, error) in
+            if error == nil {
+                guard let marks = placeMarks else { return }
+                self.dealSearchResults(markPlaces: marks)
+            } else {
+                print(error?.localizedDescription ?? "error reverse Geocode Location")
+            }
+        })
+    }
+    
+    /// 用于处理搜索结果
+    /// 1. 清除之前搜索到的结果
+    /// 2. 选择第一个匹配度较高的信息给提示栏
+    /// 3. 将额外的选项信息交给tableView
     func dealSearchResults(markPlaces: [CLPlacemark]) {
-        // 1. 处理数据提交给 TableView
-        // 2. 选择匹配度较高的添加到 MapView
+        if let mark = markPlaces.first {
+            titleLabel.text = locationText(mark: mark)
+        }
         searchResults.removeAll()
         searchResults.append(contentsOf: markPlaces)
         tableView.reloadData()
     }
     
+    /// 添加大头针
     func addAnnotaionToMapView(mark: CLPlacemark) {
         
         // 清除之前的大图标
@@ -145,6 +163,7 @@ extension ViewController {
         pointAnnotation.title = mark.name
         pointAnnotation.subtitle = mark.locality
         mapView.addAnnotation(pointAnnotation)
+        lastAnnotation = pointAnnotation
         
         titleLabel.text = locationText(mark: mark)
         
@@ -172,10 +191,21 @@ extension ViewController: MKMapViewDelegate {
         print("map view did fail")
     }
     
+    /// 大头针的添加方法，不过注意只有11.0注册方法的问题
     func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
         let anView = mapView.dequeueReusableAnnotationView(withIdentifier: annotationId, for: annotation)
-        anView.calloutOffset = CGPoint(x: 0, y: -10)
+        anView.isDraggable = true
+        anView.calloutOffset = CGPoint(x: 0, y: 0)
         return anView
+    }
+    
+    /// 大头针移动代理
+    func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, didChange newState: MKAnnotationViewDragState, fromOldState oldState: MKAnnotationViewDragState) {
+        if newState == .ending {
+            guard let coordinate = view.annotation?.coordinate else { return }
+            let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+            locationReverseSearch(location: location)
+        }
     }
 }
 
@@ -194,6 +224,9 @@ extension ViewController: CLLocationManagerDelegate {
                     self.currentLocation = currentLocation
                     self.titleLabel.text = self.locationText(mark: currentLocation)
                     self.addAnnotaionToMapView(mark: currentLocation)
+                    
+                    // 用户首次定位成功后就停止定位操作
+                    manager.stopUpdatingLocation()
                 } else {
                     print(error?.localizedDescription ?? "")
                 }
